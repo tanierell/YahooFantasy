@@ -1,5 +1,0 @@
-*.pkl
-*.png
-*.xlsx
-testing.py
-excel_generator.py

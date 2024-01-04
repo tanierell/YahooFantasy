@@ -1,8 +1,10 @@
 import os
+import logging
+import warnings
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from NBA_fantasy.yahoo.utils import convert_id_to_cat, init_configuration
+from utils import convert_id_to_cat, init_configuration, init_db_config
 
 
 def weekly_summary_by_matchup(lg, week, plot=True, league_name="", caller_extra_path=''):
@@ -161,9 +163,15 @@ def weekly_summary_by_matchup(lg, week, plot=True, league_name="", caller_extra_
 
 
 if __name__ == '__main__':
-    league_name = "Ootan"
-    # league_name = "Sheniuk"
-    sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name=league_name, week=6, from_file='../oauth2.json')
+    engine = init_db_config(path_to_db_config='../postgreSQL_init/config.ini')
 
-    """ get weekly projection stats for each team/matchup """
-    weekly_summary_by_matchup(lg, week=current_week, plot=False, league_name=league_name, caller_extra_path='../')
+    warnings.filterwarnings('ignore')
+    logging.disable(logging.DEBUG)
+    logging.disable(logging.INFO)
+
+    week = 11
+    for league_name in ["Ootan", "Sheniuk"]:
+        sc, lg, league_id, current_week, _, end_date = init_configuration(league_name=league_name, week=week,
+                                                                          from_file='../oauth2.json')
+
+        weekly_summary_by_matchup(lg, week=current_week, plot=False, league_name=league_name, caller_extra_path='../')

@@ -4,7 +4,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from NBA_fantasy.yahoo.utils import get_teams_stats_date_range
+from utils import get_teams_stats_date_range, init_configuration
 
 
 def distribution_of_played_games_by_team(sc, lg, current_week=None, league_name="", plot=False):
@@ -23,7 +23,6 @@ def distribution_of_played_games_by_team(sc, lg, current_week=None, league_name=
 
     power_rank_by_team = {}
     for team_name in team_weakly_stats:
-
         merged_df = team_weakly_stats[team_name].merge(draft_df, how='left', right_on='player_name', left_index=True)
         merged_df = merged_df[['games_played', 'round', 'player_name']].set_index('player_name')
         merged_df['round'].fillna(14, inplace=True)
@@ -51,3 +50,10 @@ def distribution_of_played_games_by_team(sc, lg, current_week=None, league_name=
     plt.savefig(f'outputs/Plots/{league_name}/{current_week}/played_games_ranking.png', bbox_inches='tight')
     if plot:
         plt.show()
+
+
+if __name__ == '__main__':
+    league_name = "Sheniuk"
+    sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name, week=11,
+                                                                               from_file='../oauth2.json')
+    distribution_of_played_games_by_team(sc, lg, current_week=current_week, league_name=league_name, plot=True)

@@ -1,16 +1,14 @@
 import os
-import time
-import pytz
 import pickle
-import requests
 import datetime
+import logging
 import numpy as np
 import pandas as pd
 import concurrent.futures
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
-from NBA_fantasy.yahoo.utils import fetch_daily_data, fetch_teams_roster_ids, init_configuration
+from utils import fetch_daily_data, fetch_teams_roster_ids, init_configuration, run_yahoo_api_concurrently, init_db_config
 
 
 def best_FA_pickup(sc, lg, league_id, plot=False, current_week=None, league_name=""):
@@ -60,7 +58,7 @@ def best_FA_pickup(sc, lg, league_id, plot=False, current_week=None, league_name
 
     week_dates = [start_date + datetime.timedelta(days=i) for i in range(7)]
     added_players_weekly_stats = {date.strftime('%d-%m-%Y'): fetch_daily_data(sc, added_players_ids, date=date) for date in week_dates}
-    dropped_players_weekly_stats = {date.strftime('%d-%m-%Y'): fetch_daily_data(sc, dropped_players_ids, date=date) for date in week_dates}
+    # dropped_players_weekly_stats = {date.strftime('%d-%m-%Y'): fetch_daily_data(sc, dropped_players_ids, date=date) for date in week_dates}
 
     added_players_df['transaction_type'] = 'add'
     # dropped_players_df['transaction_type'] = 'drop'
@@ -146,54 +144,74 @@ def best_FA_pickup(sc, lg, league_id, plot=False, current_week=None, league_name
         plt.show()
 
 
-def get_weekly_FA_projection(sc, lg, league_id, end_date, path_to_db='../local_db'):
-    kwargs = {'params': {'format': 'json'}, 'allow_redirects': True}
-    top_fa_names = []
-    top_fa_status = []
-    top_k = 100
-    with sc.session as s:
-        for start in range(0, top_k, 25):
-            url = f'https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/players;status=A;sort=AR;start={start}'
-            res = s.request('GET', url, **kwargs).json()['fantasy_content']['league'][1]['players']
-            top_fa_names += [fa_obj['player'][0][2]['name']['full'] for i, fa_obj in res.items() if i != 'count']
-            for i, fa_obj in res.items():
-                if i != 'count':
-                    status = '' if 'status' not in fa_obj['player'][0][4] else fa_obj['player'][0][4]['status']
-                    top_fa_status.append(status)
-    s.close()
+def get_weekly_FA_projection(sc, league_id, start_date, end_date, engine):
+    urls = [f'https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/players;status=A;sort=AR;start={start}'
+            for start in range(0, 200, 25)]
 
-    full_players_avg = pickle.load(open(f"{path_to_db}/players_averages/players_avg_df.pkl", 'rb'))
-    ect_time = datetime.datetime.now(tz=pytz.timezone('US/Eastern'))
-    today_date = datetime.datetime.combine(ect_time, datetime.time())
-    full_players_schedule = pickle.load(open(f"{path_to_db}/schedule/full_players_schedule.pkl", 'rb'))
-    fetched_dates = ((full_players_schedule.columns <= pd.to_datetime(end_date, format='%Y-%m-%d')) &
-                     (full_players_schedule.columns >= pd.to_datetime(today_date, format='%Y-%m-%d')))
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = [executor.submit(run_yahoo_api_concurrently, sc, url) for url in urls]
+        responses = [future.result() for future in concurrent.futures.as_completed(futures)]
+
+    fetched_responses = [list(res['fantasy_content']['league'][1]['players'].values()) for res in responses]
+    p_objects = [player['player'][0] for sublist in fetched_responses for player in sublist if isinstance(player, dict)]
+    top_fa_names = [p_obj[2]['name']['full'] for p_obj in p_objects]
+    top_fa_ids = [str(p_obj[1]['player_id']) for p_obj in p_objects]
+    top_fa_status = [p_obj[4]['status'] if 'status' in p_obj[4] else 'H' for p_obj in p_objects]
+
+    players_totals_query = f"SELECT * FROM players_season_totals WHERE yahoo_id IN {tuple(top_fa_ids)};"
+    players_schedule_query = f"SELECT * FROM full_players_schedule WHERE yahoo_id IN {tuple(top_fa_ids)};"
+
+    full_players_totals = pd.read_sql_query(players_totals_query, engine, index_col='yahoo_id')
+    full_players_schedule = pd.read_sql_query(players_schedule_query, engine, index_col=['yahoo_id', 'full_name'])
+
+    stats_cols = ['FGM', 'FGA', 'FTM', 'FTA', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO']
+    numeric_cols = [col for col in full_players_totals.columns if col not in ['full_name', 'status', 'team']]
+    full_players_totals[numeric_cols] = full_players_totals[numeric_cols].apply(pd.to_numeric, errors='coerce')
+    full_players_totals[stats_cols] = full_players_totals[stats_cols].div(full_players_totals['GP'], axis=0)
+    full_players_avg = full_players_totals[['full_name'] + stats_cols]
+
+    full_players_schedule.columns = [datetime.datetime.strptime(col, '%Y-%m-%d') for col in
+                                     full_players_schedule.columns]
+
+    fetched_dates = ((full_players_schedule.columns <= pd.to_datetime(end_date)) &
+                     (full_players_schedule.columns >= pd.to_datetime(start_date)))
+
     fetched_players_schedule = full_players_schedule.loc[:, fetched_dates]
-    fetched_players_schedule.loc[:, ['number_of_games']] = fetched_players_schedule.sum(axis=1)
-    for name in top_fa_names:
-        if name not in full_players_avg.index:
-            print(f"{name} not in full_players_avg.index")
+    fetched_players_schedule.loc[:, ['number_of_games']] = fetched_players_schedule.apply(lambda x: x.notnull().sum(), axis=1)
 
-    stats_cols = ['FGM', 'FGA', 'FTM', 'FTA', 'FG3M', 'PTS', 'REB', 'AST', 'STL', 'BLK', 'TOV']
-    fa_averages = full_players_avg[full_players_avg.index.isin(top_fa_names)]
-    fa_averages.loc[:, ['status']] = fa_averages.index.map(dict(zip(top_fa_names, top_fa_status)))
+    for name in top_fa_names:
+        if name not in full_players_avg.full_name.values:
+            print(f"{name} not in full_players_avg")
+
+    stats_cols = ['FGM', 'FGA', 'FTM', 'FTA', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO']
+    fa_averages = full_players_avg[full_players_avg.index.isin(top_fa_ids)]
+    fa_averages.loc[:, ['status']] = fa_averages.index.map(dict(zip(top_fa_ids, top_fa_status)))
     fa_averages = fa_averages.merge(fetched_players_schedule, left_index=True, right_index=True)
     fa_averages = fa_averages[fa_averages['status'] != 'INJ']
     num_games_vector = fa_averages.loc[:, ['number_of_games']].values
     current_team_averages = fa_averages[stats_cols]
+
     fa_projections = current_team_averages.mul(num_games_vector, axis=0)
-    fa_projections.rename(columns={'TOV': 'TO', 'FG3M': '3PTM', 'STL': 'ST'}, inplace=True)
     fa_projections = fa_projections[['FGM', 'FGA', 'FTM', 'FTA', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO']]
     fa_projections.fillna(0, inplace=True)
     fa_projections = fa_projections[~(fa_projections == 0).all(axis=1)]
+    fa_projections.index = [idx[1] for idx in fa_projections.index]
+    fa_projections = fa_projections.round(1)
 
     return fa_projections
 
 
 if __name__ == '__main__':
-    # league_name = "Ootan"
-    league_name = "Sheniuk"
-    all_time_players_list = pickle.load(open('../local_db/all_time_players_nba_api.pkl', 'rb'))
-    sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name=league_name, week=6, from_file="../oauth2.json")
-    fa_projections = get_weekly_FA_projection(sc, lg, league_id, end_date)
-    print(fa_projections)
+    engine = init_db_config(path_to_db_config='../postgreSQL_init/config.ini')
+
+    logging.disable(logging.DEBUG)
+    logging.disable(logging.INFO)
+
+    week = 11
+    for league_name in ["Ootan", "Sheniuk"]:
+        sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name=league_name, week=week, from_file="../oauth2.json")
+        start_date = datetime.datetime.today().date()
+        end_date = start_date + datetime.timedelta(days=2)
+        # fa_projections = get_weekly_FA_projection(sc, league_id, start_date=start_date, end_date=end_date, engine=engine)
+        # fa_projections.to_csv(f"../outputs/Excels/{league_name}/FA_projections.csv")
+        best_FA_pickup(sc, lg, league_id, plot=True, current_week=current_week, league_name=league_name)

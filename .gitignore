@@ -1,3 +1,6 @@
 *.pkl
 *.png
 *.xlsx
+*.txt
+
+testing.py

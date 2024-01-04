@@ -3,6 +3,7 @@ import pytz
 import pickle
 import requests
 import datetime
+import configparser
 import pandas as pd
 import concurrent.futures
 from bs4 import BeautifulSoup
@@ -12,6 +13,9 @@ from yahoo_oauth import OAuth2
 import yahoo_fantasy_api as yfa
 
 import nba_api.stats.endpoints as nba_endpoints
+from sqlalchemy import create_engine, DateTime
+import psycopg2
+import time
 
 
 def init_configuration(league_name, week=None, from_file='oauth2.json'):
@@ -28,6 +32,7 @@ def init_configuration(league_name, week=None, from_file='oauth2.json'):
 
 def fetch_player_average_concurrently(player_id: int, player_name: str, get_schedule: bool = False, path_to_db: str = '../local_db'):
     """Fetch player average stats for season, and schedule for player. Returns empty dict. this func saves the data to local_db"""
+    print(f"Fetching player {player_name} with id {player_id}")
     reformatted_player_name = player_name.replace(' ', '_')
     player_season_average_obj = nba_endpoints.playerdashboardbygeneralsplits.PlayerDashboardByGeneralSplits(
         player_id=player_id,
@@ -91,13 +96,35 @@ def update_db_with_players_averages(path_to_db='../local_db', build_full_schedul
     today_reformatted_date = start_date.strftime('%Y-%m-%d')
 
     players_ids_names_schedule = []
-    for player_id, player_name in zip(filtered_df['player_id'], filtered_df['full_name']):
-        average_exist = os.path.exists(f"{path_to_db}/players_averages/{today_reformatted_date}/{player_name.replace(' ', '_')}.pkl")
-        schedule_exist = os.path.exists(f"{path_to_db}/schedule/{player_name.replace(' ', '_')}.pkl")
+    # import configparser
+    # config = configparser.ConfigParser()
+    # config.read('../postgreSQL_init/config.ini')
+    # config = config['postgreSQL Configurations']
+    # hostname = config['hostname']
+    # username = config['username']
+    # password = config['password']
+    # dbname = config['dbname']
+    # db_string = f"postgresql+psycopg2://{username}:{password}@{hostname}/{dbname}"
+    # engine = create_engine(db_string)
+    # df = pd.read_sql_query('SELECT * FROM players_ids_conversions', engine)
+    # players_ids_names_schedule = [(row.nba_id, row.full_name, False) for i, row in df.iterrows()]
+    # for player_id, player_name in zip(df['nba_id'], df['full_name']):
+    #     average_exist = os.path.exists(
+    #         f"{path_to_db}/players_averages/{today_reformatted_date}/{player_name.replace(' ', '_')}.pkl")
+    #     schedule_exist = os.path.exists(f"{path_to_db}/schedule/{player_name.replace(' ', '_')}.pkl")
+    #
+    #     run_schedule = True if not schedule_exist else False
+    #     if not average_exist:
+    #         players_ids_names_schedule.append((player_id, player_name, run_schedule))
 
-        run_schedule = True if not schedule_exist else False
-        if not average_exist:
-            players_ids_names_schedule.append((player_id, player_name, run_schedule))
+    for player_id, player_name in zip(filtered_df['player_id'], filtered_df['full_name']):
+            average_exist = os.path.exists(f"{path_to_db}/players_averages/{today_reformatted_date}/{player_name.replace(' ', '_')}.pkl")
+            schedule_exist = os.path.exists(f"{path_to_db}/schedule/{player_name.replace(' ', '_')}.pkl")
+
+            run_schedule = True if not schedule_exist else False
+            if 1:
+            # if not average_exist:
+                players_ids_names_schedule.append((player_id, player_name, run_schedule))
 
     # '''fetching only those without schedule - run this if want specific players schedule'''
     # players_ids_names_schedule = [player for player in players_ids_names_schedule if player[2]]
@@ -261,8 +288,8 @@ def fetch_daily_data(sc, players_ids, date=datetime.date.today()):
 
 def convert_id_to_cat(stat_id):
     """Convert stat id to category. Returns category name. expects stat_id to be string."""
-    stat_id_to_category = {3: 'FGA', 4: 'FGM', 5: 'FG%', 6: 'FTA', 7: 'FTM', 8: 'FT%', 10: '3PTM', 12: 'PTS',
-                           15: 'REB', 16: 'AST', 17: 'ST', 18: 'BLK', 19: 'TO', 9004003: 'FGM/FGA', 9007006: 'FTM/FTA'}
+    stat_id_to_category = {0: 'GP', 2: 'MP', 3: 'FGA', 4: 'FGM', 5: 'FG%', 6: 'FTA', 7: 'FTM', 8: 'FT%', 9: '3PA', 10: '3PTM',
+                           11: '3P%', 12: 'PTS', 15: 'REB', 16: 'AST', 17: 'ST', 18: 'BLK', 19: 'TO', 9004003: 'FGM/FGA', 9007006: 'FTM/FTA'}
 
     return stat_id_to_category.get(int(stat_id), None)
 
@@ -404,13 +431,129 @@ def get_all_time_matchups_differential(sc):
         pickle.dump(df, f)
 
 
+def run_yahoo_api_concurrently(sc, url):
+    kwargs = {'params': {'format': 'json'}, 'allow_redirects': True}
+    with sc.session as s:
+        res = s.get(url, **kwargs).json()
+    s.close()
+    return res
+
+
+def process_yahoo_stats_results(sc, engine):
+    players_ids_df = pd.read_sql_table('players_ids_conversions', engine)
+    players_ids = players_ids_df['yahoo_id'].tolist()
+
+    url_base = 'https://fantasysports.yahooapis.com/fantasy/v2/players;player_keys='
+    players_ids_lists = [players_ids[i:i + 24] for i in range(0, len(players_ids), 24)]
+    urls = [url_base + ','.join([f"nba.p.{id}" for id in subset]) + '/stats' for subset in players_ids_lists]
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = [executor.submit(run_yahoo_api_concurrently, sc, url) for url in urls]
+        responses = [future.result() for future in concurrent.futures.as_completed(futures)]
+
+    all_players_objects = [list(res['fantasy_content']['players'].values()) for res in responses]
+    all_players_lists = [player for sublist in all_players_objects for player in sublist]
+    all_players_totals = []
+    all_players_info = []
+    for player_obj in all_players_lists:
+        if not isinstance(player_obj, dict):
+            continue
+
+        player_info, player_stats = player_obj['player']
+
+        name_idx = [i for i, x in enumerate(player_info) if 'name' in x]
+        id_idx = [i for i, x in enumerate(player_info) if 'player_id' in x]
+        team_idx = [i for i, x in enumerate(player_info) if 'editorial_team_full_name' in x]
+        injury_idx = [i for i, x in enumerate(player_info) if 'status' in x]
+
+        player_name = player_info[name_idx[0]]['name']['full'] if name_idx else None
+        player_id = player_info[id_idx[0]]['player_id'] if id_idx else None
+        player_team = player_info[team_idx[0]]['editorial_team_full_name'] if team_idx else None
+        player_injury_status = player_info[injury_idx[0]]['status'] if injury_idx else 'H'
+
+        player_stats_to_val = {stat['stat']['stat_id']: stat['stat']['value'] for stat in
+                               player_stats['player_stats']['stats']}
+        players_stats_cat = {convert_id_to_cat(stat_id): stat_val for stat_id, stat_val in
+                             player_stats_to_val.items()}
+
+        players_stats_cat.pop(None, None)
+        players_stats_cat['yahoo_id'] = player_id
+        players_stats_cat['full_name'] = player_name
+        all_players_totals.append(players_stats_cat)
+        all_players_info.append({'yahoo_id': player_id, 'full_name': player_name,
+                                 'team': player_team, 'injury_status': player_injury_status})
+
+    all_players_info_df = pd.DataFrame(all_players_info)
+    all_players_totals_df = pd.DataFrame(all_players_totals)
+    columns = ['yahoo_id', 'full_name'] + [col for col in all_players_totals_df.columns if
+                                           col not in ['yahoo_id', 'full_name']]
+
+    return all_players_totals_df[columns], all_players_info_df
+
+
+def init_db_config(path_to_db_config='../postgreSQL_init/config.ini'):
+    config = configparser.ConfigParser()
+    config.read(path_to_db_config)
+
+    config = config['postgreSQL Configurations']
+    username = config['username']
+    password = config['password']
+    hostname = config['hostname']
+    dbname = config['dbname']
+    port = config['port']
+
+    db_string = f"postgresql+psycopg2://{username}:{password}@{hostname}/{dbname}"
+    engine = create_engine(db_string)
+
+    return engine
+
+
+def init_nba_schedule(engine):
+    url_base = 'https://data.nba.com/data/10s/v2015/json/mobile_teams/nba/2023/league/00_full_schedule_week_tbds.json'
+    res = requests.get(url_base).json()
+    all_matchups = []
+    for game in res['lscd']:
+        for game_obj in game['mscd']['g']:
+            game_time = game_obj['etm']
+            h_team = game_obj['h']['tc'] + ' ' + game_obj['h']['tn']
+            v_team = game_obj['v']['tc'] + ' ' + game_obj['v']['tn']
+            gweek = game_obj['gweek']
+            if gweek is not None:
+                all_matchups.append([game_time, h_team, v_team])
+
+    nba_schedule = pd.DataFrame(all_matchups, columns=['game_time', 'home_team', 'away_team'])
+    nba_schedule['game_time'] = pd.to_datetime(nba_schedule['game_time'])
+    nba_schedule.sort_values(by='game_time', inplace=True)
+
+    nba_schedule.to_sql('full_teams_schedule', engine, if_exists='replace', index=False, dtype={'game_time': DateTime})
+
+
+def init_players_schedule(engine):
+    players_info_df = pd.read_sql_table('players_personal_info', engine)
+    teams_schedule_df = pd.read_sql_table('full_teams_schedule', engine)
+
+    teams = sorted(pd.unique(teams_schedule_df[['home_team', 'away_team']].values.ravel('K')))
+    new_df = pd.DataFrame(index=pd.unique(teams_schedule_df['game_time'].dt.date), columns=teams)
+
+    for date, row in new_df.iterrows():
+        full_schedule_date = teams_schedule_df[teams_schedule_df['game_time'].dt.date == date]
+        game_times = full_schedule_date['game_time'].dt.strftime('%H:%M').values.tolist()
+        home_teams = full_schedule_date['home_team'].values.tolist()
+        away_teams = full_schedule_date['away_team'].values.tolist()
+
+        new_df.loc[date, home_teams] = list(zip(game_times, [f"vs. {away_team}" for away_team in away_teams]))
+        new_df.loc[date, away_teams] = list(zip(game_times, [f"@ {home_team}" for home_team in home_teams]))
+
+    teams_schedule_reformatted = new_df.transpose()
+    players_info_df.set_index('team', inplace=True)
+    merged_df = players_info_df.merge(teams_schedule_reformatted, how='left', left_index=True, right_index=True)
+    merged_df.reset_index(inplace=True)
+
+    merged_df = merged_df[['yahoo_id', 'full_name'] + teams_schedule_reformatted.columns.tolist()]
+
+    merged_df.to_sql('full_players_schedule', engine, if_exists='replace', index=False)
+
+
 if __name__ == '__main__':
     league_name = "Sheniuk"
-    sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name, week=6, from_file='../oauth2.json')
-    get_all_time_matchups_differential(sc)
-    teams_schedule = fetch_current_week_league_schedule()
-    datetime_obj = datetime.datetime.combine(start_date, datetime.time())
-    get_all_players_details(sc, lg, teams_schedule, datetime_obj, league_id)
-
-
-
+    sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name, week=11, from_file='../oauth2.json')

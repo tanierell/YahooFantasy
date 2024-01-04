@@ -2,38 +2,42 @@ import os
 import pytz
 import logging
 import datetime
+import warnings
 
-from utils import init_configuration, update_db_with_players_averages
+from utils import init_configuration, init_db_config
 
-from NBA_fantasy.yahoo.custom_api.weekly_projections import weekly_matchups_projections
-from NBA_fantasy.yahoo.custom_api.games_amount_power_rank import distribution_of_played_games_by_team
-from NBA_fantasy.yahoo.custom_api.FA_analysis import best_FA_pickup
-from NBA_fantasy.yahoo.custom_api.weekly_results_analysis import weekly_summary_by_matchup
+from custom_api.weekly_projections import weekly_matchups_projections
+from custom_api.games_amount_power_rank import distribution_of_played_games_by_team
+from custom_api.FA_analysis import best_FA_pickup
+from custom_api.weekly_results_analysis import weekly_summary_by_matchup
 
 oauth_logger = logging.getLogger('yahoo_oauth')
 oauth_logger.disabled = True
 
 
 if __name__ == '__main__':
-    # league_name = "Ootan"
-    # league_name = "Sheniuk"
+    warnings.filterwarnings("ignore")
+    logging.disable(logging.DEBUG)
+    logging.disable(logging.INFO)
+
+    engine = init_db_config(path_to_db_config='postgreSQL_init/config.ini')
+
     for league_name in ["Ootan", "Sheniuk"]:
         print(f"League: {league_name}")
+        week = 11
         ect_date = datetime.datetime.combine(datetime.datetime.now(tz=pytz.timezone('US/Eastern')), datetime.time())
-        sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name=league_name, week=7)
+        sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name=league_name, week=week)
 
         """ update local_db with players averages and schedule (update_db_with_players_averages function): """
         reformatted_today_date = ect_date.strftime("%Y-%m-%d")
-        if not os.path.exists(f"local_db/players_averages/{reformatted_today_date}"):
-            print("Updating local_db with players averages and schedule (update_db_with_players_averages function):")
-            # update_db_with_players_averages(path_to_db='local_db')
 
         """ get weekly projection stats for each team/matchup (weekly_matchups_projections function): """
         weekly_matchups_projections(sc=sc, lg=lg, league_id=league_id, end_date=end_date,
-                                    league_name=league_name, current_week=current_week, path_to_db='local_db')
+                                    league_name=league_name, current_week=current_week, engine=engine)
         print("Weekly projection stats for each matchup (weekly_matchups_projections function): DONE")
 
-        if ect_date.weekday() == 0:
+        # if ect_date.weekday() == 0:
+        if 1:
             """
             Distribution of played games by team (distribution_of_played_games_by_team function):
                 - creates a played_games_ranking.png file with a plot of the distribution of played games by team
