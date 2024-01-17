@@ -4,14 +4,14 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from utils import get_teams_stats_date_range, init_configuration
+from utils import get_teams_stats_date_range, init_configuration, init_db_config
 
 
-def distribution_of_played_games_by_team(sc, lg, current_week=None, league_name="", plot=False):
+def distribution_of_played_games_by_team(sc, lg, league_id, engine, current_week=None, league_name="", plot=False):
     start_date, end_date = lg.week_date_range(current_week)
     start_date = datetime.datetime.combine(start_date, datetime.datetime.min.time()) + datetime.timedelta(hours=2)
     weekly_dates = [start_date + datetime.timedelta(days=i) for i in range(7)]
-    team_weakly_stats = get_teams_stats_date_range(sc, lg, weekly_dates, lg.league_id)
+    team_weakly_stats = get_teams_stats_date_range(sc=sc, engine=engine, dates_list=weekly_dates, league_id=league_id)
     draft_picks = lg.draft_results()
     draft_df = pd.DataFrame(draft_picks)
     draft_players_ids = draft_df['player_id'].astype(int).tolist()
@@ -24,10 +24,10 @@ def distribution_of_played_games_by_team(sc, lg, current_week=None, league_name=
     power_rank_by_team = {}
     for team_name in team_weakly_stats:
         merged_df = team_weakly_stats[team_name].merge(draft_df, how='left', right_on='player_name', left_index=True)
-        merged_df = merged_df[['games_played', 'round', 'player_name']].set_index('player_name')
+        merged_df = merged_df[['GP', 'round', 'player_name']].set_index('player_name')
         merged_df['round'].fillna(14, inplace=True)
         merged_df = merged_df[merged_df.index != 'Total']
-        merged_df['power_rank'] = merged_df['games_played'] / merged_df['round']
+        merged_df['power_rank'] = merged_df['GP'] / merged_df['round']
         merged_df.sort_values('power_rank', ascending=False, inplace=True)
         merged_df.loc['Total'] = merged_df.sum(axis=0)
         power_rank_by_team[team_name] = merged_df
@@ -45,15 +45,16 @@ def distribution_of_played_games_by_team(sc, lg, current_week=None, league_name=
     ax.set_ylabel('Normalized Rank')
     ax.set_xticklabels(ax.get_xticklabels(), rotation=45, horizontalalignment='right')
     plt.tight_layout()
-    if not os.path.exists(f'outputs/Plots/{league_name}/{current_week}'):
-        os.makedirs(f'outputs/Plots/{league_name}/{current_week}')
-    plt.savefig(f'outputs/Plots/{league_name}/{current_week}/played_games_ranking.png', bbox_inches='tight')
+    if not os.path.exists(f'../outputs/Plots/{league_name}/{current_week}'):
+        os.makedirs(f'../outputs/Plots/{league_name}/{current_week}')
+    plt.savefig(f'../outputs/Plots/{league_name}/{current_week}/played_games_ranking.png', bbox_inches='tight')
     if plot:
         plt.show()
 
 
 if __name__ == '__main__':
     league_name = "Sheniuk"
-    sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name, week=11,
+    sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name, week=12,
                                                                                from_file='../oauth2.json')
-    distribution_of_played_games_by_team(sc, lg, current_week=current_week, league_name=league_name, plot=True)
+    engine = init_db_config('../config.ini')
+    distribution_of_played_games_by_team(sc, lg, engine, current_week=current_week, league_name=league_name, plot=True)

@@ -106,7 +106,6 @@ def weekly_summary_by_matchup(lg, week, plot=True, league_name="", caller_extra_
 
     the_table = pd.plotting.table(ax, places_df, loc='center', cellColours=cell_colors)
     plt.tight_layout()
-    ''' save table as png '''
     if not os.path.exists(caller_extra_path + f'outputs/Plots/{league_name}/{week}'):
         os.makedirs(caller_extra_path + f'outputs/Plots/{league_name}/{week}')
 
@@ -163,13 +162,13 @@ def weekly_summary_by_matchup(lg, week, plot=True, league_name="", caller_extra_
 
 
 if __name__ == '__main__':
-    engine = init_db_config(path_to_db_config='../postgreSQL_init/config.ini')
+    engine = init_db_config(path_to_db_config='../config.ini')
 
     warnings.filterwarnings('ignore')
     logging.disable(logging.DEBUG)
     logging.disable(logging.INFO)
 
-    week = 11
+    week = 12
     for league_name in ["Ootan", "Sheniuk"]:
         sc, lg, league_id, current_week, _, end_date = init_configuration(league_name=league_name, week=week,
                                                                           from_file='../oauth2.json')

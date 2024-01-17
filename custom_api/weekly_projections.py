@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 
-from utils import (fetch_teams_roster_ids, convert_id_to_cat, init_configuration, init_db_config)
+from utils import (convert_id_to_cat, init_configuration, init_db_config, fetch_roster_ids_by_dates)
 
 
 def get_weekly_matchup_status(lg, current_week):
@@ -62,11 +62,11 @@ def players_projections_current_week(sc, lg, league_id, end_date, current_week, 
     ect_time = datetime.datetime.now(tz=pytz.timezone('US/Eastern'))
     today_date = datetime.datetime.combine(ect_time, datetime.time())
 
-    rosters_data = fetch_teams_roster_ids(sc, lg, datetime_obj=today_date, league_id=league_id)
-    all_ids = [str(id) for ids in rosters_data.values() for id in ids['ids']]
+    rosters_data = fetch_roster_ids_by_dates(sc=sc, datetime_objects=[today_date], league_id=league_id)
+    query_ids = tuple(set(rosters_data['yahoo_id'].tolist()))
 
-    players_totals_query = f"SELECT * FROM players_season_totals WHERE yahoo_id IN {tuple(all_ids)};"
-    players_schedule_query = f"SELECT * FROM full_players_schedule WHERE yahoo_id IN {tuple(all_ids)};"
+    players_totals_query = f"SELECT * FROM players_season_totals WHERE yahoo_id IN {query_ids};"
+    players_schedule_query = f"SELECT * FROM full_players_schedule WHERE yahoo_id IN {query_ids};"
 
     full_players_totals = pd.read_sql_query(players_totals_query, engine, index_col='yahoo_id')
     full_players_schedule = pd.read_sql_query(players_schedule_query, engine, index_col=['yahoo_id', 'full_name'])
@@ -87,9 +87,9 @@ def players_projections_current_week(sc, lg, league_id, end_date, current_week, 
     league_matchups_names, league_matchups_status = get_weekly_matchup_status(lg, current_week)
     teams_projections = {}
 
-    for team_name, names_ids_statutes in rosters_data.items():
-        players_status = names_ids_statutes['status']
-        players_ids = [str(id) for id in names_ids_statutes['ids']]
+    for team_name, roster_info_df in rosters_data.groupby('team_name'):
+        players_status = roster_info_df['status'].tolist()
+        players_ids = roster_info_df['yahoo_id'].tolist()
         current_team_averages = full_players_avg[full_players_avg.index.isin(players_ids)]
         current_team_averages.loc[:, ['status']] = current_team_averages.index.map(dict(zip(players_ids, players_status)))
         current_team_averages = current_team_averages.merge(fetched_players_schedule, left_index=True, right_index=True)
@@ -175,12 +175,12 @@ def weekly_matchups_projections(sc, lg, league_id, end_date, league_name,
 
 
 if __name__ == '__main__':
-    engine = init_db_config(path_to_db_config='../postgreSQL_init/config.ini')
+    engine = init_db_config(path_to_db_config='../config.ini')
 
     logging.disable(logging.DEBUG)
     logging.disable(logging.INFO)
 
-    week = 11
+    week = 12
     for league_name in ["Ootan", "Sheniuk"]:
         sc, lg, league_id, current_week, _, end_date = init_configuration(league_name=league_name, week=week,
                                                                           from_file='../oauth2.json')

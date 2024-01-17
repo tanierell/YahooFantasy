@@ -1,24 +1,16 @@
-import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from utils import convert_id_to_cat, init_configuration
+from utils import init_configuration
 
 
-if __name__ == '__main__':
-    league_name = "Sheniuk"
-    # league_name = "Ootan"
-    week = 11
-    sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name=league_name, week=week,
-                                                                               from_file='../oauth2.json')
+def get_updated_league_standings(lg, week, league_name):
     lg_standings_obj = lg.standings()
     matchups = list(lg.matchups(week=week)['fantasy_content']['league'][1]['scoreboard']['0']['matchups'].values())
     team_weekly_w_l_t = {}
     for matchup in [x for x in matchups if isinstance(x, dict)]:
         stats_winner = ['None' if 'is_tied' in stat['stat_winner'] else stat['stat_winner']['winner_team_key']
                         for stat in matchup['matchup']['stat_winners']]
-        teams_id_name = {team['team'][0][0]['team_key']: team['team'][0][2]['name']
-                         for team in matchup['matchup']['0']['teams'].values() if isinstance(team, dict)}
 
         for team in [x for x in matchup['matchup']['0']['teams'].values() if isinstance(x, dict)]:
             team_name = team['team'][0][2]['name']
@@ -45,7 +37,8 @@ if __name__ == '__main__':
         team_total_ties = team_prev_ties + team_current_week_ties
         added_ties = team_total_ties / 2
 
-        team_win_percentage = round((team_total_wins + added_ties) / (team_total_wins + team_total_losses + team_total_ties), 3)
+        team_win_percentage = round(
+            (team_total_wins + added_ties) / (team_total_wins + team_total_losses + team_total_ties), 3)
         lg_standings_df.loc[len(lg_standings_df)] = [team_name, team_total_wins, team_total_losses, team_total_ties,
                                                      team_win_percentage]
 
@@ -59,5 +52,26 @@ if __name__ == '__main__':
     lg_standings_df['Win%'] = lg_standings_df['Win%'].apply(lambda x: f"{x:.3f}")
     lg_standings_df["W-L-T"] = lg_standings_df.apply(lambda x: f"{x['Wins']}-{x['Losses']}-{x['Ties']}", axis=1)
     lg_standings_df = lg_standings_df[['Team', 'W-L-T', 'Win%', 'GB', 'Previous Rank']]
-    lg_standings_df[['GB', 'Previous Rank']] = lg_standings_df[['GB', 'Previous Rank']].astype(str)
-    print(5)
+    lg_standings_df['Previous Rank'] = lg_standings_df['Previous Rank'].astype(int)
+    lg_standings_df['GB'] = lg_standings_df['GB'].apply(lambda x: str(x) if x % 0.5 == 0 else f'{x:.0f}')
+    lg_standings_df.index += 1
+
+    fig = plt.figure(dpi=400)
+    ax = fig.add_subplot(111)
+    ax.xaxis.set_visible(False)
+
+    table = pd.plotting.table(data=lg_standings_df, ax=ax, loc='center', cellLoc='center')
+    ax.set_title(f"Standings - Week {week}")
+    ax.set_axis_off()
+    plt.savefig(f"../outputs/Plots/{league_name}/{week}/standings_week_{week}.png", bbox_inches='tight')
+    plt.show()
+
+
+if __name__ == '__main__':
+    # league_name = "Sheniuk"
+    league_name = "Ootan"
+    week = 12
+    sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name=league_name, week=week,
+                                                                               from_file='../oauth2.json')
+
+    get_updated_league_standings(lg, week, league_name)
