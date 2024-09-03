@@ -2,5 +2,6 @@
 *.png
 *.xlsx
 *.txt
-
+*.csv
+aws.xml
 testing.py
