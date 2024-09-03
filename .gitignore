@@ -3,5 +3,5 @@
 *.xlsx
 *.txt
 *.csv
-aws.xml
+*.xml
 testing.py

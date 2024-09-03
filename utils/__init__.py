@@ -14,6 +14,28 @@ logging.disable(logging.DEBUG)
 logging.disable(logging.INFO)
 logging.disable(logging.WARNING)
 
+def tal_instructions():
+    # integrate tokens
+    sc = OAuth2(None, None, from_file='oauth2.json')
+
+    # league's teams endpoint
+    url = f'https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/teams'
+    kwargs = {'params': {'format': 'json'}, 'allow_redirects': True}
+    with sc.session as s:
+        res = s.request('GET', url, **kwargs)
+        sc.session.close()
+
+
+    # league's endpoint
+    gm = yfa.Game(sc, 'nba')
+    sheniuk_id, dor_id = '428.l.2540', '428.l.114976'
+    league_id = dor_id if league_name == "Ootan" else sheniuk_id
+    lg = gm.to_league(league_id)
+
+    # league's roster endpoint
+    url_base = 'https://fantasysports.yahooapis.com/fantasy/v2/team/{team_key}/roster;date={date_obj.strftime("%Y-%m-%d")}'
+
+
 
 def init_configuration(league_name, week=None, from_file='oauth2.json'):
     sc = OAuth2(None, None, from_file=from_file)
@@ -22,9 +44,46 @@ def init_configuration(league_name, week=None, from_file='oauth2.json'):
     league_id = dor_id if league_name == "Ootan" else sheniuk_id
     lg = gm.to_league(league_id)
     current_week = lg.current_week() if week is None else week
+    # start_date, end_date = datetime.datetime.now().date(), datetime.datetime.now().date() + datetime.timedelta(days=6)
     start_date, end_date = lg.week_date_range(current_week)
 
     return sc, lg, league_id, current_week, start_date, end_date
+
+
+def fetch_custom_dates_lists(start_date, end_date, days=None, months=None):
+    if months is not None and days is not None:
+        start_date = datetime.datetime.now() - datetime.timedelta(days=30 * months + days)
+        end_date = datetime.datetime.now()
+
+    else:
+        start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d')
+        end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d')
+
+    dates_list = pd.date_range(start_date, end_date, freq='D')
+    dates_list = [date.date() for date in dates_list]
+    return dates_list
+
+
+def load_players_avg_by_date(players_stats_original, players_stats_method):
+    players_stats = players_stats_original.copy()
+    stats_cols = ['FGM', 'FGA', 'FTM', 'FTA', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO']
+    if players_stats_method == 'custom_dates':
+        custom_dates = fetch_custom_dates_lists(start_date=None, end_date=None, days=0, months=1)
+        players_stats = players_stats[players_stats['date'].isin(custom_dates)]
+
+    numeric_cols = [col for col in players_stats.columns if col not in ['full_name', 'status', 'team']]
+    players_stats[numeric_cols] = players_stats[numeric_cols].apply(pd.to_numeric, errors='coerce')
+
+    if players_stats_method == 'custom_dates':
+        full_players_stats_avg = players_stats.groupby(['yahoo_id', 'full_name']).apply(lambda x: x[stats_cols].mean())
+        full_players_stats_avg.reset_index('full_name', inplace=True)
+
+    else:
+        '''loaded as the full season stats, need to divide by games played to get the average per game.'''
+        players_stats[stats_cols] = players_stats[stats_cols].div(players_stats['GP'], axis=0)
+        full_players_stats_avg = players_stats[['full_name'] + stats_cols]
+
+    return full_players_stats_avg
 
 
 def fetch_roster_ids_by_dates(sc, datetime_objects, league_id, fetch_k_ids=None, fetch_k_teams=12):
@@ -42,7 +101,7 @@ def fetch_roster_ids_by_dates(sc, datetime_objects, league_id, fetch_k_ids=None,
     urls = [url_base + team_key + f'/roster;date={date_obj.strftime("%Y-%m-%d")}'
             for team_key in teams_names_keys.values() for date_obj in datetime_objects]
     responses = run_yahoo_api_concurrently(sc, urls)
-    results = {'yahoo_id': [], 'date': [], 'team_name': [], 'full_name': [], 'status': []}
+    results = {'yahoo_id': [], 'date': [], 'team_name': [], 'full_name': [], 'status': [], 'position': []}
     for res in responses:
         team_name = res['fantasy_content']['team'][0][2]['name']
         roster_object = list(res['fantasy_content']['team'][1]['roster']['0']['players'].values())
@@ -51,11 +110,14 @@ def fetch_roster_ids_by_dates(sc, datetime_objects, league_id, fetch_k_ids=None,
         players_names = [player['player'][0][2]['name']['full'] for player in roster_object if isinstance(player, dict)][:fetch_k_ids]
         players_status = [player['player'][0][4]['status'] if 'status' in player['player'][0][4] else 'H'
                           for player in roster_object if isinstance(player, dict)][:fetch_k_ids]
+        players_positions = [player['player'][1]['selected_position'][1]['position']
+                             for player in roster_object if isinstance(player, dict)][:fetch_k_ids]
         fetched_date = [res['fantasy_content']['team'][1]['roster']['date'] for _ in range(len(players_ids))][:fetch_k_ids]
 
         results['yahoo_id'].extend(players_ids)
         results['date'].extend(fetched_date)
         results['status'].extend(players_status)
+        results['position'].extend(players_positions)
         results['full_name'].extend(players_names)
         results['team_name'].extend([team_name for _ in range(len(players_ids))])
 
@@ -69,6 +131,7 @@ def get_teams_stats_date_range(sc, engine, dates_list, league_id, plot=False):
     query_dates = tuple(set(rosters_by_date_df['date'].tolist()))
     query = f"SELECT * FROM players_history_stats_daily WHERE yahoo_id IN {query_ids} AND date IN {query_dates}"
     fetched_stats = pd.read_sql_query(query, engine)
+    fetched_stats['date'] = pd.to_datetime(fetched_stats['date']).dt.date
     rosters_by_date_df['date'] = pd.to_datetime(rosters_by_date_df['date']).dt.date
     rosters_by_date_df.drop(['status', 'full_name'], axis=1, inplace=True)
     final_results = fetched_stats.merge(rosters_by_date_df, on=['yahoo_id', 'date'], how='left')

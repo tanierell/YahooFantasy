@@ -4,7 +4,44 @@ import logging
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from utils import init_configuration, run_yahoo_api_concurrently, init_db_config, fetch_roster_ids_by_dates
+from utils import init_configuration, run_yahoo_api_concurrently, init_db_config, fetch_roster_ids_by_dates, load_players_avg_by_date
+
+
+def FA_transactions_analysis(lg, current_week=None):
+    final_trans_dict = {'add': {}, 'drop': {}}
+    for specific_type in ['add', 'drop']:
+        transactions = lg.transactions(tran_types=specific_type, count='')
+        for i, transaction in enumerate([x for x in transactions if isinstance(x, dict)]):
+            transaction_type = transaction['type']
+            transaction_id = transaction['transaction_id']
+            transaction_date = datetime.datetime.fromtimestamp(int(transaction['timestamp']))
+
+            if transaction_type == "add/drop":
+                if specific_type == 'add':
+                    add_drop_flag = '0'
+                else:
+                    add_drop_flag = '1'
+            elif specific_type == transaction_type:
+                add_drop_flag = '0'
+            else:
+                continue
+
+            fetched_transaction = transaction['players'][add_drop_flag]['player']
+            player_name = fetched_transaction[0][2]['name']['full']
+            player_id = fetched_transaction[0][1]['player_id']
+
+            final_trans_dict[specific_type][transaction_id] = {'player_name': player_name, 'player_id': player_id,
+                                                               'date': transaction_date}
+
+    added_players_df = pd.DataFrame.from_dict(final_trans_dict['add'], orient='index')
+    dropped_players_df = pd.DataFrame.from_dict(final_trans_dict['drop'], orient='index')
+
+    sum_added_players = added_players_df.groupby(['player_id', 'player_name']).count()
+    sum_dropped_players = dropped_players_df.groupby(['player_id', 'player_name']).count()
+    players_transactions_count = sum_added_players.merge(sum_dropped_players, on=['player_id', 'player_name'], how='outer', suffixes=('_added', '_dropped'))
+    players_transactions_count.sort_values(by='date_dropped', ascending=False, inplace=True)
+
+    return players_transactions_count
 
 
 def best_FA_pickup(sc, engine, lg, league_id, plot=False, current_week=None, league_name=""):
@@ -58,6 +95,7 @@ def best_FA_pickup(sc, engine, lg, league_id, plot=False, current_week=None, lea
     week_dates_query = tuple([date.strftime('%Y-%m-%d') for date in week_dates_objects])
     query = f"SELECT * FROM players_history_stats_daily WHERE yahoo_id IN {added_players_ids} AND date IN {week_dates_query}"
     added_players_weekly_stats = pd.read_sql_query(query, engine)
+    added_players_weekly_stats['date'] = pd.to_datetime(added_players_weekly_stats['date']).dt.date
 
     rosters_data = fetch_roster_ids_by_dates(sc=sc, datetime_objects=week_dates_objects, league_id=league_id)
     rosters_data = rosters_data[['yahoo_id', 'date', 'team_name']]
@@ -109,7 +147,7 @@ def best_FA_pickup(sc, engine, lg, league_id, plot=False, current_week=None, lea
         plt.show()
 
 
-def get_weekly_FA_projection(sc, league_id, start_date, end_date, engine):
+def get_weekly_FA_projection(sc, league_id, start_date, end_date, engine, players_stats_method):
     urls = [f'https://fantasysports.yahooapis.com/fantasy/v2/league/{league_id}/players;status=A;sort=AR;start={start}'
             for start in range(0, 200, 25)]
 
@@ -121,21 +159,20 @@ def get_weekly_FA_projection(sc, league_id, start_date, end_date, engine):
     top_fa_ids = [str(p_obj[1]['player_id']) for p_obj in p_objects]
     top_fa_status = [p_obj[4]['status'] if 'status' in p_obj[4] else 'H' for p_obj in p_objects]
 
+    players_custom_query = f"SELECT * FROM players_history_stats_daily WHERE yahoo_id IN {tuple(top_fa_ids)};"
     players_totals_query = f"SELECT * FROM players_season_totals WHERE yahoo_id IN {tuple(top_fa_ids)};"
     players_schedule_query = f"SELECT * FROM full_players_schedule WHERE yahoo_id IN {tuple(top_fa_ids)};"
 
-    full_players_totals = pd.read_sql_query(players_totals_query, engine, index_col='yahoo_id')
+    query = players_custom_query if players_stats_method == 'custom_dates' else players_totals_query
+    full_players_totals = pd.read_sql_query(query, engine, index_col='yahoo_id')
+    full_players_avg = load_players_avg_by_date(full_players_totals.copy(), players_stats_method='custom_dates')
     full_players_schedule = pd.read_sql_query(players_schedule_query, engine, index_col=['yahoo_id', 'full_name'])
 
-    stats_cols = ['FGM', 'FGA', 'FTM', 'FTA', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO']
-    numeric_cols = [col for col in full_players_totals.columns if col not in ['full_name', 'status', 'team']]
-    full_players_totals[numeric_cols] = full_players_totals[numeric_cols].apply(pd.to_numeric, errors='coerce')
-    full_players_totals[stats_cols] = full_players_totals[stats_cols].div(full_players_totals['GP'], axis=0)
-    full_players_avg = full_players_totals[['full_name'] + stats_cols]
+    temp_fa_avg = full_players_avg.reset_index()
+    temp_fa_avg.to_sql("Ootan_FA" if league_id == '428.l.114976' else "Sheniuk_FA", engine, if_exists='replace', index=False)
 
     full_players_schedule.columns = [datetime.datetime.strptime(col, '%Y-%m-%d') for col in
                                      full_players_schedule.columns]
-
     fetched_dates = ((full_players_schedule.columns <= pd.to_datetime(end_date)) &
                      (full_players_schedule.columns >= pd.to_datetime(start_date)))
 
@@ -149,7 +186,7 @@ def get_weekly_FA_projection(sc, league_id, start_date, end_date, engine):
     stats_cols = ['FGM', 'FGA', 'FTM', 'FTA', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO']
     fa_averages = full_players_avg[full_players_avg.index.isin(top_fa_ids)]
     fa_averages.loc[:, ['status']] = fa_averages.index.map(dict(zip(top_fa_ids, top_fa_status)))
-    fa_averages = fa_averages.merge(fetched_players_schedule, left_index=True, right_index=True)
+    fa_averages = fa_averages.merge(fetched_players_schedule, left_index=True, right_on=['yahoo_id'])
     fa_averages = fa_averages[fa_averages['status'] != 'INJ']
     num_games_vector = fa_averages.loc[:, ['number_of_games']].values
     current_team_averages = fa_averages[stats_cols]
@@ -170,7 +207,15 @@ if __name__ == '__main__':
     logging.disable(logging.DEBUG)
     logging.disable(logging.INFO)
 
-    week = 12
-    for league_name in ["Ootan", "Sheniuk"]:
-        sc, lg, league_id, current_week, _, _ = init_configuration(league_name=league_name, week=week, from_file="../oauth2.json")
-        best_FA_pickup(sc, engine, lg, league_id, plot=True, current_week=current_week, league_name=league_name)
+    week = 21
+    for league_name in ["Ootan"]:
+    # for league_name in ["Sheniuk", "Ootan"]:
+        sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name=league_name, week=week, from_file="../oauth2.json")
+        end_date += datetime.timedelta(days=7)
+
+        fa_projections = get_weekly_FA_projection(sc=sc, league_id=league_id, engine=engine, players_stats_method='custom_dates',
+                                                  start_date=datetime.datetime.today().date(), end_date=end_date)
+        reformatted_date = f"{start_date.strftime('%b_%d')}-{end_date.strftime('%b_%d')}"
+        fa_projections.to_csv(f"../outputs/Excels/{league_name}/FA_proj_{reformatted_date}.csv")
+        # best_FA_pickup(sc, engine, lg, league_id, plot=False, current_week=current_week, league_name=league_name)
+        # FA_transactions_analysis(sc, engine)

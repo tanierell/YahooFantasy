@@ -1,4 +1,4 @@
-from utils import (init_configuration, init_db_config, fetch_roster_ids_by_dates)
+from utils import (init_configuration, init_db_config, fetch_roster_ids_by_dates, load_players_avg_by_date)
 
 import datetime, pytz, logging, pickle
 import pandas as pd
@@ -83,6 +83,19 @@ def plot_trade_summary(trade_summarizer, num_teams):
 def analyze_given_situation(team_names_averages):
     stats_cols = ['FGM', 'FGA', 'FTM', 'FTA', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO']
     league_avg_by_team = pd.DataFrame(columns=stats_cols)
+
+    # kuminga = team_names_averages['TheRealTani'].loc['Jonathan Kuminga']
+    # jaren_jackson = team_names_averages['LeTippex'].loc['Jaren Jackson Jr.']
+    # dejunte_murray = team_names_averages['BCMeidan'].loc['Dejounte Murray']
+    #
+    # tani_team = team_names_averages['TheRealTani'].copy()
+    # tani_team.drop(index=['Shai Gilgeous-Alexander'], inplace=True)
+    # tani_team.drop(index=['Jonathan Kuminga'], inplace=True)
+    # tani_team.loc['Jaren Jackson Jr.'] = jaren_jackson
+    # tani_team.loc['Dejounte Murray'] = dejunte_murray
+    # team_names_averages['new_team'] = tani_team
+    # league_avg_by_team.loc[TheRealTani] += list(team_names_averages['LeTippex'].loc['Jaren Jackson Jr.'])
+
     for team_name, df in team_names_averages.items():
         league_avg_by_team.loc[team_name] = list(df.sum(axis=0))
 
@@ -139,6 +152,7 @@ def analyze_trade(engine, team_names_averages=None, use_saved=True):
         team_b_players = team_names_averages[team_b_name].index.tolist()
 
         league_avg, league_ranks, league_prob = analyze_given_situation(team_names_averages)
+
         trade_summarizer["before"]["avg"] = league_avg.loc[[team_a_name, team_b_name]]
         trade_summarizer["before"]["ranks"] = league_ranks.loc[[team_a_name, team_b_name]]
         trade_summarizer["before"]["prob"] = league_prob.loc[[team_a_name, team_b_name]]
@@ -181,51 +195,54 @@ if __name__ == '__main__':
     logging.disable(logging.INFO)
 
     analyze_trade(engine, use_saved=True)
-    week = 12
-    # league_name = "Ootan"
-    league_name = "Sheniuk"
-    sc, _, league_id, _, _, _ = init_configuration(league_name=league_name, week=week, from_file="../oauth2.json")
+    week = 18
+    players_stats_method = 'custom_dates'
+    for league_name in ["Sheniuk", "Ootan"]:
+        sc, _, league_id, _, _, _ = init_configuration(league_name=league_name, week=week, from_file="../oauth2.json")
 
-    top_players_ranks = get_players_current_ratings(sc, league_id, top_k=200)
-    top_p_ids = top_players_ranks.index.tolist()
-    full_players_totals = pd.read_sql_query(f"SELECT * FROM players_season_totals WHERE yahoo_id IN {tuple(top_p_ids)};",
-                                            engine, index_col='yahoo_id')
-    stats_cols = ['FGM', 'FGA', 'FTM', 'FTA', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO']
-    full_players_totals[stats_cols + ['GP']] = full_players_totals[stats_cols + ['GP']].apply(pd.to_numeric, errors='coerce')
-    full_players_totals[stats_cols] = full_players_totals[stats_cols].div(full_players_totals['GP'], axis=0)
-    full_players_avg = full_players_totals[['full_name'] + stats_cols]
+        top_players_ranks = get_players_current_ratings(sc, league_id, top_k=200)
+        top_p_ids = top_players_ranks.index.tolist()
+        players_totals_query = f"SELECT * FROM players_season_totals WHERE yahoo_id IN {tuple(top_p_ids)};"
+        players_custom_query = f"SELECT * FROM players_history_stats_daily WHERE yahoo_id IN {tuple(top_p_ids)};"
 
-    ect_time = datetime.datetime.now(tz=pytz.timezone('US/Eastern'))
-    today_date = datetime.datetime.combine(ect_time, datetime.time())
-    rosters_data = fetch_roster_ids_by_dates(sc=sc, datetime_objects=[today_date], league_id=league_id)
+        query = players_custom_query if players_stats_method == 'custom_dates' else players_totals_query
+        full_players_totals = pd.read_sql_query(query, engine, index_col='yahoo_id')
 
-    teams_names_averages = {}
-    league_avg_by_team = pd.DataFrame(columns=stats_cols)
-    for team_name, roster_info_df in rosters_data.groupby('team_name'):
-        players_names = roster_info_df['full_name'].tolist()
-        players_status = roster_info_df['status'].tolist()
-        players_ids = roster_info_df['yahoo_id'].tolist()
-        cur_team_ranks = top_players_ranks.loc[top_players_ranks.index.isin(players_ids)].sort_values(by='rank').iloc[:13]
+        full_players_avg = load_players_avg_by_date(full_players_totals, players_stats_method=players_stats_method)
 
-        # included_players = [name for name, status in zip(players_names, players_status)
-        #                     if status != 'INJ' and name in current_team_players_ranks.index]
+        ect_time = datetime.datetime.now(tz=pytz.timezone('US/Eastern'))
+        today_date = datetime.datetime.combine(ect_time, datetime.time())
+        rosters_data = fetch_roster_ids_by_dates(sc=sc, datetime_objects=[today_date], league_id=league_id)
 
-        included_players = [p_id for p_id, status in zip(players_ids, players_status) if p_id in cur_team_ranks.index]
-        current_team_averages = full_players_avg[full_players_avg.index.isin(included_players)][stats_cols]
-        teams_names_averages[team_name] = current_team_averages
-        league_avg_by_team.loc[team_name] = list(current_team_averages.sum(axis=0))
+        teams_names_averages = {}
+        stats_cols = ['FGM', 'FGA', 'FTM', 'FTA', '3PTM', 'PTS', 'REB', 'AST', 'ST', 'BLK', 'TO']
+        league_avg_by_team = pd.DataFrame(columns=stats_cols)
+        for team_name, roster_info_df in rosters_data.groupby('team_name'):
+            players_names = roster_info_df['full_name'].tolist()
+            players_status = roster_info_df['status'].tolist()
+            players_ids = roster_info_df['yahoo_id'].tolist()
+            players_positions = roster_info_df['position'].tolist()
 
-    # league_avg_by_team, league_places_per_cat, prob_df = analyze_given_situation(teams_names_averages)
-    #
-    # """for each team, print the number of categories it is above each other team """
-    # for team_name, team_avg in league_places_per_cat.iterrows():
-    #     for other_team_name, other_team_avg in league_places_per_cat.iterrows():
-    #         if team_name == other_team_name:
-    #             continue
-    #         print(f"{team_name} is above {other_team_name} in {sum(team_avg < other_team_avg)} categories")
+            cur_team_ranks = top_players_ranks.loc[top_players_ranks.index.isin(players_ids)].sort_values(by='rank')
+            included_players = [name for name, status in zip(players_names, players_status)
+                                if status != 'INJ' and name in cur_team_ranks.full_name.tolist()][:13]
 
-    with open(f'../{league_name}-teams_names_averages.pkl', 'wb') as f:
-        pickle.dump(teams_names_averages, f)
-    # league_avg_by_team.to_csv(f'../league_avg_by_team.csv')
-    # league_places_per_cat.to_csv(f'../league_places_per_cat.csv')
-    # prob_df.to_csv(f'../prob_df.csv')
+            # included_players = [p_id for p_id, status in zip(players_ids, players_status) if p_id in cur_team_ranks.index]
+            current_team_averages = full_players_avg[full_players_avg.full_name.isin(included_players)][stats_cols]
+            teams_names_averages[team_name] = current_team_averages
+            league_avg_by_team.loc[team_name] = list(current_team_averages.sum(axis=0))
+
+        # league_avg_by_team, league_places_per_cat, prob_df = analyze_given_situation(teams_names_averages)
+        #
+        # """for each team, print the number of categories it is above each other team """
+        # for team_name, team_avg in league_places_per_cat.iterrows():
+        #     for other_team_name, other_team_avg in league_places_per_cat.iterrows():
+        #         if team_name == other_team_name:
+        #             continue
+        #         print(f"{team_name} is above {other_team_name} in {sum(team_avg < other_team_avg)} categories")
+
+        with open(f'../{league_name}-teams_names_averages.pkl', 'wb') as f:
+            pickle.dump(teams_names_averages, f)
+        # league_avg_by_team.to_csv(f'../league_avg_by_team.csv')
+        # league_places_per_cat.to_csv(f'../league_places_per_cat.csv')
+        # prob_df.to_csv(f'../prob_df.csv')

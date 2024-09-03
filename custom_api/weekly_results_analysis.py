@@ -168,7 +168,7 @@ if __name__ == '__main__':
     logging.disable(logging.DEBUG)
     logging.disable(logging.INFO)
 
-    week = 12
+    week = 20
     for league_name in ["Ootan", "Sheniuk"]:
         sc, lg, league_id, current_week, _, end_date = init_configuration(league_name=league_name, week=week,
                                                                           from_file='../oauth2.json')

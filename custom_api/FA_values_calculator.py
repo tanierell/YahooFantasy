@@ -36,17 +36,19 @@ def get_players_current_ratings(sc, engine, league_id, top_k):
     # added_players.to_sql('players_personal_info', engine, if_exists='append', index=False)
 
 
-
-
-
 if __name__ == '__main__':
     logging.disable(logging.DEBUG)
     logging.disable(logging.INFO)
     logging.disable(logging.WARNING)
 
-    engine = init_db_config(path_to_db_config='config.ini')
-    sc = OAuth2(None, None, from_file='oauth2.json')
-    players_totals_query = f"SELECT * FROM players_season_totals;"
-    players_schedule_query = f"SELECT * FROM full_players_schedule;"
-
-    get_players_current_ratings(sc, engine, league_id='428.l.2540', top_k=25)
+    fa_proj = pd.read_csv('../outputs/Excels/Ootan/FA_proj_Mar_29-Mar_31.csv', index_col=0)
+    calculate_power = lambda ft_made, ft_attempted, fg_made, fg_attempted: pd.Series([ft_made ** 2 / (ft_attempted + 1e-8), fg_made ** 2 / (ft_attempted + 1e-8)])
+    fa_proj[['FTP', 'FGP']] = fa_proj.apply(lambda x: calculate_power(x.FTM, x.FTA, x.FGM, x.FGA), axis=1)
+    fa_proj.drop(columns=['FTM', 'FGM', 'FTA', 'FGA'], inplace=True)
+    new_df = (fa_proj - fa_proj.mean()) / fa_proj.std()
+    new_df['TO'] = -1 * new_df['TO']
+    needed_cols = ['BLK', 'ST', 'FTP']
+    new_df['SCORE'] = new_df[needed_cols].sum(axis=1)
+    new_df.drop(columns=[col for col in new_df.columns if col not in needed_cols and col != 'SCORE'], inplace=True)
+    new_df.sort_values(by='SCORE', ascending=False, inplace=True)
+    new_df['RANK'] = range(1, len(new_df) + 1)

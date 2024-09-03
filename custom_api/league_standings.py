@@ -63,15 +63,16 @@ def get_updated_league_standings(lg, week, league_name):
     table = pd.plotting.table(data=lg_standings_df, ax=ax, loc='center', cellLoc='center')
     ax.set_title(f"Standings - Week {week}")
     ax.set_axis_off()
-    plt.savefig(f"../outputs/Plots/{league_name}/{week}/standings_week_{week}.png", bbox_inches='tight')
+    plt.savefig(f"outputs/Plots/{league_name}/{week}/standings_week_{week}.png", bbox_inches='tight')
     plt.show()
 
 
 if __name__ == '__main__':
-    # league_name = "Sheniuk"
-    league_name = "Ootan"
-    week = 12
-    sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name=league_name, week=week,
-                                                                               from_file='../oauth2.json')
+    league_name = "Sheniuk"
+    # league_name = "Ootan"
+    week = 14
+    for league_name in ["Ootan", "Sheniuk"]:
+        sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name=league_name, week=week,
+                                                                                   from_file='../oauth2.json')
 
-    get_updated_league_standings(lg, week, league_name)
+        get_updated_league_standings(lg, week, league_name)

@@ -1,3 +1,4 @@
+import datetime
 import logging, sqlalchemy
 import pandas as pd
 from yahoo_oauth import OAuth2
@@ -59,7 +60,8 @@ def update_players_daily_stats(date: str, players_ids: list[str]):
     numeric_cols = [col for col in df.columns if col not in ['yahoo_id', 'date', 'full_name', 'injury_status']]
     df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors='coerce')
     df = df[df['MP'] != 0]
-    df.to_sql('players_history_stats_daily', engine, if_exists='append', index=False, method=insert_on_conflict_nothing)
+    # df.to_sql('players_history_stats_daily', engine, if_exists='append', index=False, method=insert_on_conflict_nothing)
+    df.to_sql('players_history_stats_daily', engine, if_exists='append', index=False)
 
 
 def check_missing_dates_players_stats(engine, final_cup_date='2023-12-09'):
@@ -72,8 +74,9 @@ def check_missing_dates_players_stats(engine, final_cup_date='2023-12-09'):
 
     players_history_stats_daily = pd.read_sql('players_history_stats_daily', engine)[['yahoo_id', 'date']]
     captured_stats_dates = [date.strftime("%Y-%m-%d") for date in players_history_stats_daily['date'].unique()]
+    captured_stats_dates = captured_stats_dates[:-1]
     missing_dates = [date for date in schedule_dates if date not in captured_stats_dates and date != final_cup_date]
-
+    #
     return missing_dates
 
 
@@ -142,6 +145,7 @@ if __name__ == '__main__':
     update_players_season_totals_and_info(sc, engine)
     all_players_info = pd.read_sql('players_personal_info', engine)
     full_players_schedule = pd.read_sql('full_players_schedule', engine, index_col=['yahoo_id', 'full_name'])
+
     missing_dates = check_missing_dates_players_stats(engine)
     for date in missing_dates:
         if date not in full_players_schedule.columns:

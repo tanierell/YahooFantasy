@@ -45,16 +45,16 @@ def distribution_of_played_games_by_team(sc, lg, league_id, engine, current_week
     ax.set_ylabel('Normalized Rank')
     ax.set_xticklabels(ax.get_xticklabels(), rotation=45, horizontalalignment='right')
     plt.tight_layout()
-    if not os.path.exists(f'../outputs/Plots/{league_name}/{current_week}'):
-        os.makedirs(f'../outputs/Plots/{league_name}/{current_week}')
-    plt.savefig(f'../outputs/Plots/{league_name}/{current_week}/played_games_ranking.png', bbox_inches='tight')
+    if not os.path.exists(f'outputs/Plots/{league_name}/{current_week}'):
+        os.makedirs(f'outputs/Plots/{league_name}/{current_week}')
+    plt.savefig(f'outputs/Plots/{league_name}/{current_week}/played_games_ranking.png', bbox_inches='tight')
     if plot:
         plt.show()
 
 
 if __name__ == '__main__':
-    league_name = "Sheniuk"
-    sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name, week=12,
-                                                                               from_file='../oauth2.json')
-    engine = init_db_config('../config.ini')
-    distribution_of_played_games_by_team(sc, lg, engine, current_week=current_week, league_name=league_name, plot=True)
+    for league_name in ["Ootan", "Sheniuk"]:
+        sc, lg, league_id, current_week, start_date, end_date = init_configuration(league_name, week=14,
+                                                                                   from_file='../oauth2.json')
+        engine = init_db_config('../config.ini')
+        distribution_of_played_games_by_team(sc, lg, league_id, engine, current_week=current_week, league_name=league_name, plot=False)

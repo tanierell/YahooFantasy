@@ -1,0 +1,14 @@
+- multiple teams trade scenarios:
+    - 3 team trade scenarios
+    - unequal trade (a team gives up more players than they get back)
+    - complete a team averages after trade with the mean FA top k players
+
+- change the calculations of the df named "prob_df" from a normal distribution of the whole team's average, to a sum of each player distribution
+    - the existing method is currently calculates the average of the team by using each player's average
+    - the new method needs to to treat each player as normal distribution, and the team's distribution will be the sum of the players' distributions
+
+- Build a chart of players, where the axis are the punt's and the "fight in" categories' power value.
+
+- create a better visualized FA projections:
+    - creating a sheet for each need (for example, sorted by a col), where each player contains its calculated value along with the projected stats, and a graph for all the players.
+    - it can be an interactive cmd interaction, or an excel which is sorted by specific needs

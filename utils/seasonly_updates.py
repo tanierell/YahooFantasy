@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert
 from yahoo_oauth import OAuth2
 
 from utils import init_db_config, run_yahoo_api_concurrently
+import datetime
 
 
 def insert_on_conflict_nothing(table, conn, keys, data_iter):
@@ -61,7 +62,10 @@ def init_players_schedule(engine):
     teams = sorted(pd.unique(teams_schedule_df[['home_team', 'away_team']].values.ravel('K')))
     new_df = pd.DataFrame(index=pd.unique(teams_schedule_df['game_time'].dt.date), columns=teams)
 
+    allstar_break = [datetime.date(2024, 2, 16) + datetime.timedelta(days=i) for i in range(6)]
     for date, row in new_df.iterrows():
+        if date in allstar_break:
+            continue
         full_schedule_date = teams_schedule_df[teams_schedule_df['game_time'].dt.date == date]
         game_times = full_schedule_date['game_time'].dt.strftime('%H:%M').values.tolist()
         home_teams = full_schedule_date['home_team'].values.tolist()
@@ -107,6 +111,6 @@ if __name__ == '__main__':
 
     engine = init_db_config(path_to_db_config='../config.ini')
     sc = OAuth2(None, None, from_file='../oauth2.json')
-    update_new_players_info('428.l.2540', engine, sc)
-    init_nba_schedule(engine)
+    # update_new_players_info('428.l.2540', engine, sc)
+    # init_nba_schedule(engine)
     init_players_schedule(engine)
